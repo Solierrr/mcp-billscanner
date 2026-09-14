@@ -1,0 +1,8 @@
+{
+  "sucesso": true,
+  "modo_execucao": "demonstracao_offline",
+  "aviso_demonstracao": "Nenhuma API externa foi consultada; localização e potencial solar são fictícios e servem apenas para testar o software.",
+  "endereco_formatado": "Avenida Paulista, 1000, São Paulo, SP — coordenadas fictícias do modo demonstração",
+  "latitude": -23.5614,
+  "longitude": -46.6559
+}

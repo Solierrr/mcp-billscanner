@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "calculadora-solar": {
+      "command": "C:\\caminho\\absoluto\\ai-billscanner\\.venv\\Scripts\\python.exe",
+      "args": [
+        "C:\\caminho\\absoluto\\ai-billscanner\\main.py"
+      ],
+      "disabled": false
+    }
+  }
+}
