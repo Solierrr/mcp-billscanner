@@ -27,9 +27,21 @@ async def main() -> None:
     )
 
     print("=== GEOCODIFICAÇÃO FICTÍCIA ===")
-    print(json.dumps(geocoding, ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            geocoding.model_dump(mode="json"),
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     print("\n=== CÁLCULO SOLAR FICTÍCIO ===")
-    print(json.dumps(calculation, ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            calculation.model_dump(mode="json"),
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

@@ -7,6 +7,16 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from .api_models import (
+    BrazilianAddressInput,
+    GeocodingToolResponse,
+    LatitudeInput,
+    LongitudeInput,
+    MonthlyBillInput,
+    MonthlyConsumptionInput,
+    OptionalBrazilianAddressInput,
+    SolarCalculationToolResponse,
+)
 from .config import ConfigurationError, Settings
 from .contracts import GeocodingResult, SolarApiClient
 from .demo.client import DemoApiClient
@@ -18,6 +28,11 @@ from .service import (
 )
 
 
+# As APIs Google recebem a chave na query string. Evita que logs informativos
+# do cliente HTTP exponham a credencial ao registrar a URL completa.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 mcp = FastMCP("Calculadora Solar")
 settings = Settings.from_env()
 api_client: SolarApiClient = (
@@ -27,47 +42,50 @@ calculation_service = SolarCalculationService(settings)
 
 
 @mcp.tool()
-async def geocodificar_endereco(endereco: str) -> dict[str, Any]:
-    """Converte um endereço textual brasileiro em latitude e longitude.
+async def geocodificar_endereco(
+    endereco: BrazilianAddressInput,
+) -> GeocodingToolResponse:
+    """Converte um endereço brasileiro em coordenadas geográficas.
 
-    No modo real, requer a Google Geocoding API habilitada para a mesma chave
-    configurada em GOOGLE_SOLAR_API_KEY. No modo de demonstração, retorna
-    coordenadas fictícias somente para exercitar o fluxo sem fazer chamadas de
-    rede; não use essas coordenadas como localização real.
+    Use quando houver um endereço, mas não latitude e longitude. A resposta
+    fornece o endereço padronizado e as coordenadas correspondentes. No modo de
+    demonstração, as coordenadas são identificadas explicitamente como simuladas.
     """
     try:
         normalized_address = _validate_address(endereco)
         result = await api_client.geocode_address(normalized_address)
-        return {
-            "sucesso": True,
-            **_execution_metadata(),
-            "endereco_formatado": result.formatted_address,
-            "latitude": round(result.latitude, 7),
-            "longitude": round(result.longitude, 7),
-        }
+        return GeocodingToolResponse.model_validate(
+            {
+                "sucesso": True,
+                **_execution_metadata(),
+                "endereco_formatado": result.formatted_address,
+                "latitude": round(result.latitude, 7),
+                "longitude": round(result.longitude, 7),
+            }
+        )
     except (InputValidationError, ConfigurationError, ExternalServiceError) as exc:
-        return _error_response(exc)
+        return GeocodingToolResponse.model_validate(_error_response(exc))
     except Exception:
         logging.exception("Erro inesperado em ferramenta MCP.")
-        return _unexpected_error_response()
+        return GeocodingToolResponse.model_validate(_unexpected_error_response())
 
 
 @mcp.tool()
 async def calcular_sistema_solar(
-    latitude: float | None = None,
-    longitude: float | None = None,
-    consumo_mensal_kwh: float | None = None,
-    valor_conta_reais: float | None = None,
-    endereco: str | None = None,
-) -> dict[str, Any]:
-    """Dimensiona um sistema solar e estima investimento, economia e payback.
+    latitude: LatitudeInput = None,
+    longitude: LongitudeInput = None,
+    consumo_mensal_kwh: MonthlyConsumptionInput = None,
+    valor_conta_reais: MonthlyBillInput = None,
+    endereco: OptionalBrazilianAddressInput = None,
+) -> SolarCalculationToolResponse:
+    """Dimensiona um sistema fotovoltaico e estima investimento e retorno.
 
-    Informe latitude e longitude juntas ou somente endereco. Também é
-    obrigatório informar consumo_mensal_kwh ou valor_conta_reais. Quando conta
-    e consumo são enviados juntos, a tarifa efetiva é calculada pela razão entre
-    eles; caso contrário, usa-se a tarifa configurada (R$ 0,95/kWh por padrão).
-    O entrypoint normal usa as APIs externas; o módulo app.demo injeta o adapter
-    offline exclusivamente para a demonstração local.
+    Informe latitude e longitude juntas ou somente endereco, nunca os dois
+    formatos. Informe também consumo_mensal_kwh, valor_conta_reais ou ambos. A
+    ferramenta considera potencial solar, limite do telhado, painel de
+    referência, custos configurados e degradação natural para recomendar o
+    sistema. Consulte as descrições dos campos da resposta para interpretar as
+    unidades, origens e limitações de cada valor.
     """
     try:
         resolved_latitude, resolved_longitude, geocoding = await _resolve_location(
@@ -116,17 +134,19 @@ async def calcular_sistema_solar(
         }
         if geocoding is not None:
             response["endereco_geocodificado"] = geocoding.formatted_address
-        return response
+        return SolarCalculationToolResponse.model_validate(response)
     except (
         InputValidationError,
         SolarDataError,
         ConfigurationError,
         ExternalServiceError,
     ) as exc:
-        return _error_response(exc)
+        return SolarCalculationToolResponse.model_validate(_error_response(exc))
     except Exception:
         logging.exception("Erro inesperado em ferramenta MCP.")
-        return _unexpected_error_response()
+        return SolarCalculationToolResponse.model_validate(
+            _unexpected_error_response()
+        )
 
 
 async def _resolve_location(
