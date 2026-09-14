@@ -18,6 +18,7 @@ Servidor [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) em Pyt
 - Preço de referência do módulo separado da estimativa de custo instalado usada no investimento.
 - Payback mensal com redução linear de potência de 0,55% ao ano.
 - Timeout, novas tentativas para falhas temporárias e erros JSON estruturados.
+- Schemas MCP de entrada e saída autodescritivos, com tipo, unidade, finalidade e condição de presença de cada campo para clientes e agentes de IA.
 
 ## Painel comercial de referência
 
@@ -39,6 +40,7 @@ As fontes foram consultadas em 13/09/2026. Todos os valores devem ser atualizado
 .
 ├── main.py                         # entrypoint MCP stdio
 ├── app/
+│   ├── api_models.py               # contratos públicos Pydantic e descrições MCP
 │   ├── config.py                   # ambiente e hipóteses configuráveis
 │   ├── contracts.py                # contrato comum dos adapters
 │   ├── service.py                  # validações e cálculos puros
@@ -48,7 +50,7 @@ As fontes foram consultadas em 13/09/2026. Todos os valores devem ser atualizado
 │   │   └── __main__.py             # python -m app.demo
 │   └── normal/
 │       └── google_client.py         # Solar API e Geocoding API
-├── tests/                          # testes unitários unittest
+├── tests/                          # testes unitários e de contrato MCP
 ├── examples/                       # entradas e saídas JSON copiáveis
 ├── pyproject.toml                  # instalação e versões fixadas
 ├── .env.example                    # modelo de configuração sem segredo
@@ -73,7 +75,7 @@ python -m pip install -e .
 if (!(Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-O arquivo `.env` está no `.gitignore`. Nunca versione ou envie uma chave real para logs, mensagens ou commits.
+O arquivo `.env` está no `.gitignore`. Nunca versione ou envie uma chave real para logs, mensagens ou commits. O servidor eleva os loggers `httpx` e `httpcore` para `WARNING`, pois as APIs Google recebem a chave na query string e um log informativo da URL completa poderia expô-la.
 
 ## Testar sem API, cartão ou faturamento
 
@@ -175,7 +177,7 @@ No Kiro, abra a configuração MCP pela feature panel ou procure por **MCP** na 
 
 Não é necessário colocar a chave no JSON: `app/config.py` procura o `.env` na raiz do projeto. Se preferir definir `env` no cliente MCP, mantenha a configuração fora do Git.
 
-## Testes unitários
+## Testes unitários e de contrato
 
 A suíte usa apenas `unittest`, incluído no Python:
 
@@ -183,7 +185,13 @@ A suíte usa apenas `unittest`, incluído no Python:
 python -m unittest discover -s tests -v
 ```
 
-Os testes não chamam serviços externos. Eles cobrem configuração, validações, tarifas, dimensionamento, payback, limite do telhado, adapters demo/normal, registro MCP e `main.py`.
+Os **25 testes** não chamam serviços externos. Eles cobrem configuração, validações, tarifas, dimensionamento, payback, limite do telhado, adapters demo/normal, registro MCP, `main.py` e também:
+
+- descrição de todos os parâmetros de entrada e de todas as propriedades de saída publicadas pelo FastMCP;
+- união de sucesso/erro discriminada por `sucesso` e rejeição de propriedades de saída desconhecidas;
+- validação e serialização exata dos exemplos JSON pelos modelos Pydantic;
+- retorno de `structuredContent` sem wrapper `result`;
+- omissão de contexto opcional indisponível em erros e proteção dos logs HTTP informativos.
 
 ## Exemplos de entrada e saída
 
@@ -193,6 +201,8 @@ Os arquivos podem ser copiados diretamente para um cliente MCP:
 - `examples/calcular_sistema_solar.output.demo.json`
 - `examples/geocodificar_endereco.input.json`
 - `examples/geocodificar_endereco.output.demo.json`
+
+Os arquivos `*.output.demo.json` são exemplos executáveis e passam sem alteração pelos modelos públicos. O contrato normativo é o schema MCP gerado de `app/api_models.py`.
 
 Entrada resumida de cálculo:
 
@@ -223,11 +233,13 @@ Saída resumida no modo demo:
 }
 ```
 
-Consulte o arquivo `*.output.demo.json` correspondente para ver o contrato completo.
+Consulte o arquivo `*.output.demo.json` correspondente para ver o payload completo.
 
 ## Ferramentas MCP
 
 ### `geocodificar_endereco`
+
+Converte um endereço brasileiro em endereço padronizado, latitude e longitude. Use quando o consumidor não possuir coordenadas.
 
 Entrada:
 
@@ -237,11 +249,12 @@ Entrada:
 }
 ```
 
-Resposta esperada:
+Resposta real ilustrativa:
 
 ```json
 {
   "sucesso": true,
+  "modo_execucao": "google_apis",
   "endereco_formatado": "Av. Paulista, 1000 - São Paulo - SP, Brasil",
   "latitude": -23.0,
   "longitude": -46.0
@@ -251,6 +264,8 @@ Resposta esperada:
 As coordenadas acima são apenas ilustrativas. A ferramenta exige que o resultado da Google contenha o componente de país `BR`.
 
 ### `calcular_sistema_solar`
+
+Dimensiona o sistema e estima investimento, economia e payback.
 
 Com coordenadas:
 
@@ -278,50 +293,106 @@ Regras de entrada:
 - Informe pelo menos `consumo_mensal_kwh` ou `valor_conta_reais`.
 - Com consumo e conta, a tarifa é `valor_conta_reais / consumo_mensal_kwh`.
 - Apenas com conta, o consumo é estimado pela tarifa configurada.
-- Valores energéticos devem ser positivos, finitos e coordenadas precisam estar em faixas válidas.
-
-Exemplo ilustrativo e abreviado de resposta:
-
-```json
-{
-  "sucesso": true,
-  "consumo_mensal_kwh": 520.0,
-  "tarifa_aplicada_reais_kwh": 0.9808,
-  "painel_referencia": "JA Solar JAM72S30-550/MR",
-  "preco_referencia_modulo_reais": 780.0,
-  "mao_de_obra_instalacao_por_painel_reais": 632.5,
-  "outros_custos_sistema_por_painel_reais": 387.5,
-  "fator_desempenho_sistema": 0.85,
-  "paineis_recomendados": 8,
-  "limitado_pelo_telhado": false,
-  "geracao_mensal_estimada_kwh": 520.0,
-  "percentual_consumo_compensado": 100.0,
-  "investimento_estimado_reais": 14400.0,
-  "economia_mensal_estimada_reais": 510.0,
-  "payback_estimado_anos": 2.4,
-  "observacoes": [
-    "Estimativa indicativa; confirme projeto, sombreamento, perdas, tarifa e orçamento com profissionais habilitados.",
-    "A energia DC da API foi convertida por um fator de desempenho antes do cálculo financeiro.",
-    "Módulo, mão de obra e demais itens são referências de mercado configuráveis; os valores reais dependem do imóvel e da região.",
-    "O payback considera somente a redução linear anual de potência dos painéis (0.55%), pressupondo instalação e uso adequados.",
-    "Para um orçamento detalhado e adequado ao imóvel, consulte um técnico ou uma empresa especializada em energia solar."
-  ]
-}
-```
+- Valores energéticos devem ser positivos e finitos; coordenadas precisam estar em faixas válidas.
 
 O resultado real depende do imóvel, das configurações retornadas pela API e das variáveis de ambiente.
 
-Erros seguem um contrato consistente:
+### Contrato MCP autodescritivo
+
+As duas ferramentas publicam `inputSchema` e `outputSchema`. Cada propriedade possui `description`; as entradas também possuem exemplos. A saída é uma união `oneOf` discriminada por `sucesso`: `true` seleciona o payload de sucesso e `false`, o payload de erro. Os objetos de saída têm `additionalProperties: false`, o que ajuda a detectar mudanças acidentais de contrato.
+
+As condições entre entradas — coordenadas juntas ou endereço, além de consumo ou conta — são descritas no schema e validadas em execução. Ausências, faixas inválidas e combinações incompatíveis que chegam à ferramenta retornam o envelope estruturado com `sucesso: false`. Um valor com tipo incompatível com o `inputSchema` é rejeitado antes pelo FastMCP como erro de protocolo MCP e, por isso, não produz esse envelope.
+
+#### Entradas
+
+| Ferramenta | Campo | Tipo | Como usar |
+|---|---|---|---|
+| `geocodificar_endereco` | `endereco` | texto obrigatório | Endereço brasileiro entre 5 e 500 caracteres após normalização dos espaços. |
+| `calcular_sistema_solar` | `latitude` | número ou `null`, graus | Entre -90 e 90; enviar junto com `longitude` e sem `endereco`. |
+| `calcular_sistema_solar` | `longitude` | número ou `null`, graus | Entre -180 e 180; enviar junto com `latitude` e sem `endereco`. |
+| `calcular_sistema_solar` | `consumo_mensal_kwh` | número ou `null`, kWh/mês | Consumo positivo; enviar este campo, a conta ou ambos. |
+| `calcular_sistema_solar` | `valor_conta_reais` | número ou `null`, R$/mês | Conta positiva; com consumo define a tarifa, sozinha permite estimar o consumo. |
+| `calcular_sistema_solar` | `endereco` | texto ou `null` | Alternativa brasileira às coordenadas; não combinar com latitude/longitude. |
+
+#### Campos comuns de resposta
+
+| Campo | Tipo | Significado |
+|---|---|---|
+| `sucesso` | booleano | Discriminador do envelope: `true` para resultado e `false` para erro tratado. |
+| `modo_execucao` | `google_apis` ou `demonstracao_offline` | Indica se foi usado o caminho normal das APIs ou o adapter fictício sem rede. |
+| `aviso_demonstracao` | texto, condicional | Existe somente no demo e informa que localização, telhado e produção são fictícios. |
+
+#### Sucesso de `geocodificar_endereco`
+
+| Campo | Tipo | Significado |
+|---|---|---|
+| `endereco_formatado` | texto | Endereço brasileiro padronizado pelo provedor; no demo identifica as coordenadas fictícias. |
+| `latitude` | número, graus | Latitude resolvida entre -90 e 90. |
+| `longitude` | número, graus | Longitude resolvida entre -180 e 180. |
+
+#### Sucesso de `calcular_sistema_solar`
+
+| Campo | Tipo/unidade | Significado |
+|---|---|---|
+| `localizacao` | objeto | Coordenadas finais usadas na consulta e no cálculo. |
+| `localizacao.latitude` | número, graus | Latitude final entre -90 e 90. |
+| `localizacao.longitude` | número, graus | Longitude final entre -180 e 180. |
+| `consumo_mensal_kwh` | número, kWh/mês | Consumo informado ou estimado. |
+| `valor_conta_informado_reais` | número ou `null`, R$/mês | Conta fornecida pelo usuário; `null` quando foi enviado somente consumo. |
+| `tarifa_aplicada_reais_kwh` | número, R$/kWh | Tarifa efetivamente usada nos cálculos. |
+| `fonte_tarifa` | enumeração | Informa se a tarifa veio da conta/consumo, da configuração padrão ou da conversão da conta. |
+| `painel_referencia` | texto | Fabricante e modelo do módulo usado na estimativa. |
+| `potencia_painel_w` | número, W | Potência nominal de cada painel proposto. |
+| `largura_painel_m` | número, m | Largura do painel proposto. |
+| `altura_painel_m` | número, m | Altura do painel proposto. |
+| `preco_referencia_modulo_reais` | número, R$ | Preço de referência de um módulo. |
+| `mao_de_obra_instalacao_por_painel_reais` | número, R$/painel | Mão de obra estimada para instalar cada painel. |
+| `outros_custos_sistema_por_painel_reais` | número, R$/painel | Rateio de inversor, estrutura, proteções, projeto e demais itens. |
+| `fator_desempenho_sistema` | número entre 0 e 1 | Fração útil após perdas; `0.85` significa 85%. |
+| `produtividade_mensal_por_painel_kwh` | número, kWh/mês | Geração útil mensal estimada de cada painel. |
+| `fonte_produtividade` | enumeração | Origem da produtividade: configuração Solar API ajustada, fallback ou dados fictícios. |
+| `configuracao_google_paineis` | inteiro ou `null` | Painéis da configuração da Google Solar API selecionada; `null` no fallback e no demo. |
+| `potencia_painel_referencia_google_w` | número ou `null`, W | Potência do painel de referência usada pela Google; `null` no fallback e no demo. |
+| `horas_sol_maximas_ano` | número ou `null`, h/ano | Máximo anual informado pela Solar API; é informativo e não entra diretamente na fórmula financeira. |
+| `paineis_recomendados` | inteiro | Quantidade proposta sem ultrapassar o limite físico estimado do telhado. |
+| `capacidade_google_paineis_referencia` | inteiro ou `null` | Máximo original estimado pela Google para os painéis de referência dela, antes do ajuste por área; `null` no demo. |
+| `metodo_capacidade_telhado` | enumeração | Método usado para interpretar a capacidade: ajuste por área, contagem sem dimensões ou demo fictício. |
+| `limitado_pelo_telhado` | booleano | `true` quando o espaço estimado impede compensar todo o consumo. |
+| `geracao_mensal_estimada_kwh` | número, kWh/mês | Geração útil total estimada do sistema. |
+| `consumo_mensal_compensado_kwh` | número, kWh/mês | Parcela do consumo coberta pela geração; nunca excede o consumo. |
+| `percentual_consumo_compensado` | número, % | Percentual do consumo coberto pela geração. |
+| `investimento_estimado_reais` | número, R$ | Soma estimada de módulos, mão de obra e demais custos. |
+| `economia_mensal_estimada_reais` | número, R$/mês | Economia inicial limitada ao consumo que pode ser compensado. |
+| `payback_estimado_anos` | número ou `null`, anos | Momento em que a economia acumulada recupera o investimento; `null` se não ocorrer em 100 anos. |
+| `observacoes` | lista de textos | Premissas, limitações, origem dos dados, custos e recomendação de avaliação profissional. |
+| `endereco_geocodificado` | texto, condicional | Endereço padronizado; existe somente quando a entrada foi fornecida por `endereco`. |
+
+Os nomes que contêm `google` indicam **proveniência**: são valores ou quantidades originalmente recebidos da Google Solar API antes dos ajustes para o painel comercial. Eles foram preservados para não quebrar o JSON existente. No demo, esses campos são `null`; `fonte_produtividade` e `metodo_capacidade_telhado` identificam explicitamente os dados fictícios.
+
+#### Erro tratado
+
+| Campo | Tipo | Significado |
+|---|---|---|
+| `erro` | objeto | Contexto seguro e legível por máquina sobre a falha. |
+| `erro.codigo` | texto | Código estável, como `entrada_invalida`, `configuracao_invalida`, `timeout` ou `http_error`. |
+| `erro.mensagem` | texto | Explicação segura para a IA ou para o usuário. |
+| `erro.servico` | texto, condicional | Serviço que falhou; aparece somente em erros externos. |
+| `erro.status_code` | inteiro, condicional | Status HTTP externo, quando disponível. |
+
+Exemplo:
 
 ```json
 {
   "sucesso": false,
+  "modo_execucao": "google_apis",
   "erro": {
     "codigo": "entrada_invalida",
     "mensagem": "latitude deve estar entre -90 e 90."
   }
 }
 ```
+
+Campos condicionais são omitidos quando não se aplicam; não são adicionados como `null`. Em contraste, campos de domínio que fazem parte de todo sucesso de cálculo permanecem presentes e podem ser `null`: `valor_conta_informado_reais`, os campos Google, `horas_sol_maximas_ano` e `payback_estimado_anos`.
 
 ## Variáveis de ambiente
 
@@ -379,7 +450,7 @@ Assim, prompts, chatbot e consumidores MCP não precisam mudar.
 
 ## Estado de validação
 
-Compilação, importação, descoberta das ferramentas MCP, parsing das configurações e cenários determinísticos de cálculo podem ser validados sem chave. Uma chamada ponta a ponta depende de chave válida, faturamento e APIs habilitadas no Google Cloud.
+Compilação, importação, parsing das configurações, 25 testes e cenários determinísticos de cálculo podem ser validados sem chave. A suíte também inspeciona os schemas publicados e executa as duas ferramentas MCP offline para confirmar que `structuredContent` preserva exatamente os exemplos JSON. Uma chamada real ponta a ponta depende de chave válida, faturamento e APIs habilitadas no Google Cloud.
 
 ## Licença
 
